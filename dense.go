@@ -8,6 +8,7 @@ import (
 	"github.com/unixpickle/autofunc"
 	"github.com/unixpickle/num-analysis/linalg"
 	"github.com/unixpickle/serializer"
+	"github.com/unixpickle/weakai/neuralnet"
 	"github.com/unixpickle/weakai/rnn"
 )
 
@@ -44,6 +45,11 @@ type DenseLayer struct {
 
 	// InitTrace is the initial value for the Hebbian trace.
 	InitTrace *autofunc.Variable
+
+	// If UseActivation is true, then outputs of the layer
+	// are fed into hyperbolic tangent and the tangents
+	// are used to compute the Hebbian trace.
+	UseActivation bool
 }
 
 // DeserializeDenseLayer deserializes a DenseLayer.
@@ -84,6 +90,11 @@ func (d *DenseLayer) Parameters() []*autofunc.Variable {
 		d.Plasticities,
 		d.InitTrace,
 	}
+}
+
+// StateSize returns the size of the state vectors.
+func (d *DenseLayer) StateSize() int {
+	return d.InputCount * d.OutputCount
 }
 
 // StartState returns the initial trace.
@@ -142,13 +153,16 @@ func (d *DenseLayer) timestep(state, in autofunc.Result) (newState, out autofunc
 		Cols: d.InputCount,
 	}
 	appliedWeights := weightTran.Apply(in)
-	appliedHebb := autofunc.MatMulVec(state, d.OutputCount, d.InputCount, in)
-	appliedHebb = autofunc.Mul(d.Plasticities, appliedHebb)
+	appliedHebb := autofunc.MatMulVec(autofunc.Mul(d.Plasticities, state),
+		d.OutputCount, d.InputCount, in)
 	out = autofunc.Add(d.Biases, autofunc.Add(appliedWeights, appliedHebb))
+	if d.UseActivation {
+		out = neuralnet.HyperbolicTangent{}.Apply(out)
+	}
 
 	keepRate := autofunc.AddScaler(autofunc.Scale(d.TraceRate, -1), 1)
 	newState = autofunc.Add(autofunc.ScaleFirst(state, keepRate),
-		autofunc.ScaleFirst(d.TraceRate, autofunc.OuterProduct(out, in)))
+		autofunc.ScaleFirst(autofunc.OuterProduct(out, in), d.TraceRate))
 
 	return
 }
@@ -161,15 +175,18 @@ func (d *DenseLayer) timestepR(rv autofunc.RVector, state,
 		Cols: d.InputCount,
 	}
 	appliedWeights := weightTran.ApplyR(rv, in)
-	appliedHebb := autofunc.MatMulVecR(state, d.OutputCount, d.InputCount, in)
-	appliedHebb = autofunc.MulR(autofunc.NewRVariable(d.Plasticities, rv), appliedHebb)
+	plasticState := autofunc.MulR(autofunc.NewRVariable(d.Plasticities, rv), state)
+	appliedHebb := autofunc.MatMulVecR(plasticState, d.OutputCount, d.InputCount, in)
 	out = autofunc.AddR(autofunc.NewRVariable(d.Biases, rv),
 		autofunc.AddR(appliedWeights, appliedHebb))
+	if d.UseActivation {
+		out = neuralnet.HyperbolicTangent{}.ApplyR(rv, out)
+	}
 
 	traceRate := autofunc.NewRVariable(d.TraceRate, rv)
 	keepRate := autofunc.AddScalerR(autofunc.ScaleR(traceRate, -1), 1)
 	newState = autofunc.AddR(autofunc.ScaleFirstR(state, keepRate),
-		autofunc.ScaleFirstR(traceRate, autofunc.OuterProductR(out, in)))
+		autofunc.ScaleFirstR(autofunc.OuterProductR(out, in), traceRate))
 
 	return
 }
