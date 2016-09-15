@@ -8,6 +8,7 @@ import (
 	"github.com/unixpickle/autofunc"
 	"github.com/unixpickle/num-analysis/linalg"
 	"github.com/unixpickle/serializer"
+	"github.com/unixpickle/weakai/rnn"
 )
 
 const defaultTraceRate = 0.1
@@ -95,6 +96,34 @@ func (d *DenseLayer) StartStateR(rv autofunc.RVector) autofunc.RResult {
 	return autofunc.NewRVariable(d.InitTrace, rv)
 }
 
+// Batch applies the layer to a set of inputs.
+func (d *DenseLayer) Batch(in *rnn.BlockInput) rnn.BlockOutput {
+	res := &denseLayerOutput{}
+	for i := 0; i < len(in.Inputs); i++ {
+		newState, out := d.timestep(in.States[i], in.Inputs[i])
+		res.StateResults = append(res.StateResults, newState)
+		res.OutResults = append(res.OutResults, out)
+		res.StateVecs = append(res.StateVecs, newState.Output())
+		res.OutVecs = append(res.OutVecs, out.Output())
+	}
+	return res
+}
+
+// BatchR applies the layer to a set of inputs.
+func (d *DenseLayer) BatchR(rv autofunc.RVector, in *rnn.BlockRInput) rnn.BlockROutput {
+	res := &denseLayerROutput{}
+	for i := 0; i < len(in.Inputs); i++ {
+		newState, out := d.timestepR(rv, in.States[i], in.Inputs[i])
+		res.StateResults = append(res.StateResults, newState)
+		res.OutResults = append(res.OutResults, out)
+		res.StateVecs = append(res.StateVecs, newState.Output())
+		res.OutVecs = append(res.OutVecs, out.Output())
+		res.RStateVecs = append(res.RStateVecs, newState.ROutput())
+		res.ROutVecs = append(res.ROutVecs, out.ROutput())
+	}
+	return res
+}
+
 // SerializerType returns the unique ID used to serialize
 // this type with the serializer package.
 func (d *DenseLayer) SerializerType() string {
@@ -104,4 +133,124 @@ func (d *DenseLayer) SerializerType() string {
 // Serialize serializes the layer.
 func (d *DenseLayer) Serialize() ([]byte, error) {
 	return json.Marshal(d)
+}
+
+func (d *DenseLayer) timestep(state, in autofunc.Result) (newState, out autofunc.Result) {
+	weightTran := autofunc.LinTran{
+		Data: d.Weights,
+		Rows: d.OutputCount,
+		Cols: d.InputCount,
+	}
+	appliedWeights := weightTran.Apply(in)
+	appliedHebb := autofunc.MatMulVec(state, d.OutputCount, d.InputCount, in)
+	appliedHebb = autofunc.Mul(d.Plasticities, appliedHebb)
+	out = autofunc.Add(d.Biases, autofunc.Add(appliedWeights, appliedHebb))
+
+	keepRate := autofunc.AddScaler(autofunc.Scale(d.TraceRate, -1), 1)
+	newState = autofunc.Add(autofunc.ScaleFirst(state, keepRate),
+		autofunc.ScaleFirst(d.TraceRate, autofunc.OuterProduct(out, in)))
+
+	return
+}
+
+func (d *DenseLayer) timestepR(rv autofunc.RVector, state,
+	in autofunc.RResult) (newState, out autofunc.RResult) {
+	weightTran := autofunc.LinTran{
+		Data: d.Weights,
+		Rows: d.OutputCount,
+		Cols: d.InputCount,
+	}
+	appliedWeights := weightTran.ApplyR(rv, in)
+	appliedHebb := autofunc.MatMulVecR(state, d.OutputCount, d.InputCount, in)
+	appliedHebb = autofunc.MulR(autofunc.NewRVariable(d.Plasticities, rv), appliedHebb)
+	out = autofunc.AddR(autofunc.NewRVariable(d.Biases, rv),
+		autofunc.AddR(appliedWeights, appliedHebb))
+
+	traceRate := autofunc.NewRVariable(d.TraceRate, rv)
+	keepRate := autofunc.AddScalerR(autofunc.ScaleR(traceRate, -1), 1)
+	newState = autofunc.AddR(autofunc.ScaleFirstR(state, keepRate),
+		autofunc.ScaleFirstR(traceRate, autofunc.OuterProductR(out, in)))
+
+	return
+}
+
+type denseLayerOutput struct {
+	OutVecs      []linalg.Vector
+	StateVecs    []linalg.Vector
+	OutResults   []autofunc.Result
+	StateResults []autofunc.Result
+}
+
+func (d *denseLayerOutput) Outputs() []linalg.Vector {
+	return d.OutVecs
+}
+
+func (d *denseLayerOutput) States() []linalg.Vector {
+	return d.StateVecs
+}
+
+func (d *denseLayerOutput) Gradient(u *rnn.UpstreamGradient, g autofunc.Gradient) {
+	if len(d.StateVecs) == 0 {
+		return
+	}
+	tempStateUpstream := make(linalg.Vector, len(d.StateVecs[0]))
+	tempOutUpstream := make(linalg.Vector, len(d.OutVecs[0]))
+	for i := 0; i < len(d.OutVecs); i++ {
+		if u.States != nil {
+			copy(tempStateUpstream, u.States[i])
+		}
+		if u.Outputs != nil {
+			copy(tempOutUpstream, u.Outputs[i])
+		}
+		d.OutResults[i].PropagateGradient(tempOutUpstream, g)
+		d.StateResults[i].PropagateGradient(tempStateUpstream, g)
+	}
+}
+
+type denseLayerROutput struct {
+	OutVecs      []linalg.Vector
+	StateVecs    []linalg.Vector
+	ROutVecs     []linalg.Vector
+	RStateVecs   []linalg.Vector
+	OutResults   []autofunc.RResult
+	StateResults []autofunc.RResult
+}
+
+func (d *denseLayerROutput) Outputs() []linalg.Vector {
+	return d.OutVecs
+}
+
+func (d *denseLayerROutput) ROutputs() []linalg.Vector {
+	return d.ROutVecs
+}
+
+func (d *denseLayerROutput) States() []linalg.Vector {
+	return d.StateVecs
+}
+
+func (d *denseLayerROutput) RStates() []linalg.Vector {
+	return d.RStateVecs
+}
+
+func (d *denseLayerROutput) RGradient(u *rnn.UpstreamRGradient, rg autofunc.RGradient,
+	g autofunc.Gradient) {
+	if len(d.StateVecs) == 0 {
+		return
+	}
+	tempStateUpstream := make(linalg.Vector, len(d.StateVecs[0]))
+	tempStateUpstreamR := make(linalg.Vector, len(d.StateVecs[0]))
+	tempOutUpstream := make(linalg.Vector, len(d.OutVecs[0]))
+	tempOutUpstreamR := make(linalg.Vector, len(d.OutVecs[0]))
+	for i := 0; i < len(d.OutVecs); i++ {
+		if u.States != nil {
+			copy(tempStateUpstream, u.States[i])
+			copy(tempStateUpstreamR, u.RStates[i])
+		}
+		if u.Outputs != nil {
+			copy(tempOutUpstream, u.Outputs[i])
+			copy(tempOutUpstreamR, u.ROutputs[i])
+		}
+		d.OutResults[i].PropagateRGradient(tempOutUpstream, tempOutUpstreamR, rg, g)
+		d.StateResults[i].PropagateRGradient(tempStateUpstream, tempStateUpstreamR, rg, g)
+	}
 }
