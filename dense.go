@@ -160,9 +160,10 @@ func (d *DenseLayer) timestep(state, in autofunc.Result) (newState, out autofunc
 		out = neuralnet.HyperbolicTangent{}.Apply(out)
 	}
 
-	keepRate := autofunc.AddScaler(autofunc.Scale(d.TraceRate, -1), 1)
+	traceRate := neuralnet.Sigmoid{}.Apply(d.TraceRate)
+	keepRate := autofunc.AddScaler(autofunc.Scale(traceRate, -1), 1)
 	newState = autofunc.Add(autofunc.ScaleFirst(state, keepRate),
-		autofunc.ScaleFirst(autofunc.OuterProduct(out, in), d.TraceRate))
+		autofunc.ScaleFirst(autofunc.OuterProduct(out, in), traceRate))
 
 	return
 }
@@ -183,7 +184,7 @@ func (d *DenseLayer) timestepR(rv autofunc.RVector, state,
 		out = neuralnet.HyperbolicTangent{}.ApplyR(rv, out)
 	}
 
-	traceRate := autofunc.NewRVariable(d.TraceRate, rv)
+	traceRate := neuralnet.Sigmoid{}.ApplyR(rv, autofunc.NewRVariable(d.TraceRate, rv))
 	keepRate := autofunc.AddScalerR(autofunc.ScaleR(traceRate, -1), 1)
 	newState = autofunc.AddR(autofunc.ScaleFirstR(state, keepRate),
 		autofunc.ScaleFirstR(autofunc.OuterProductR(out, in), traceRate))
