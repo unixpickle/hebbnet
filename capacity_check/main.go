@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/unixpickle/num-analysis/linalg"
 	"github.com/unixpickle/sgd"
@@ -73,11 +74,14 @@ func testCapacity(c Creator, hidden []int, capacity int) bool {
 }
 
 func testCapacityOnce(c Creator, hidden []int, capacity int) bool {
+	rand.Seed(time.Now().UnixNano())
 	b := createBlock(c, hidden)
 	sample := seqtoseq.Sample{
 		Inputs:  []linalg.Vector{},
 		Outputs: []linalg.Vector{},
 	}
+
+	rand.Seed(1337)
 	for i := 0; i < capacity; i++ {
 		out := []float64{float64(rand.Intn(2))}
 		in := []float64{0}
@@ -87,6 +91,7 @@ func testCapacityOnce(c Creator, hidden []int, capacity int) bool {
 		sample.Inputs = append(sample.Inputs, in)
 		sample.Outputs = append(sample.Outputs, out)
 	}
+
 	gradienter := &sgd.RMSProp{
 		Gradienter: &seqtoseq.BPTT{
 			Block:    b,
