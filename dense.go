@@ -12,8 +12,6 @@ import (
 	"github.com/unixpickle/weakai/rnn"
 )
 
-const defaultTraceRate = 0.1
-
 func init() {
 	var d DenseLayer
 	serializer.RegisterTypedDeserializer(d.SerializerType(), DeserializeDenseLayer)
@@ -26,8 +24,12 @@ type DenseLayer struct {
 	OutputCount int
 
 	// TraceRate specifies how much the Hebbian trace can
-	// change between timesteps, where 0 means no change
-	// and 1 means complete change.
+	// change between timesteps.
+	// Either this will contain one value (a single rate)
+	// or multiple values (one rate per weight).
+	// The rate is squashed between 0 and 1 before being
+	// used, where 0 means no change and 1 means complete
+	// change.
 	TraceRate *autofunc.Variable
 
 	// Weights stores the weight matrix of the layer in a
@@ -63,12 +65,18 @@ func DeserializeDenseLayer(d []byte) (*DenseLayer, error) {
 
 // NewDenseLayer creates a DenseLayer with pre-initialized
 // (semi-randomized) parameters.
-func NewDenseLayer(inCount, outCount int) *DenseLayer {
+// If variableRate is true, a different trace rate is used
+// for each weight in the layer.
+func NewDenseLayer(inCount, outCount int, variableRate bool) *DenseLayer {
 	weightCount := inCount * outCount
+	traceCount := 1
+	if variableRate {
+		traceCount = weightCount
+	}
 	res := &DenseLayer{
 		InputCount:   inCount,
 		OutputCount:  outCount,
-		TraceRate:    &autofunc.Variable{Vector: []float64{defaultTraceRate}},
+		TraceRate:    &autofunc.Variable{Vector: make(linalg.Vector, traceCount)},
 		Weights:      &autofunc.Variable{Vector: make(linalg.Vector, weightCount)},
 		Biases:       &autofunc.Variable{Vector: make(linalg.Vector, outCount)},
 		Plasticities: &autofunc.Variable{Vector: make(linalg.Vector, weightCount)},
@@ -162,8 +170,13 @@ func (d *DenseLayer) timestep(state, in autofunc.Result) (newState, out autofunc
 
 	traceRate := neuralnet.Sigmoid{}.Apply(d.TraceRate)
 	keepRate := autofunc.AddScaler(autofunc.Scale(traceRate, -1), 1)
-	newState = autofunc.Add(autofunc.ScaleFirst(state, keepRate),
-		autofunc.ScaleFirst(autofunc.OuterProduct(out, in), traceRate))
+	if len(keepRate.Output()) == 1 {
+		newState = autofunc.Add(autofunc.ScaleFirst(state, keepRate),
+			autofunc.ScaleFirst(autofunc.OuterProduct(out, in), traceRate))
+	} else {
+		newState = autofunc.Add(autofunc.Mul(state, keepRate),
+			autofunc.Mul(autofunc.OuterProduct(out, in), traceRate))
+	}
 
 	return
 }
@@ -186,8 +199,13 @@ func (d *DenseLayer) timestepR(rv autofunc.RVector, state,
 
 	traceRate := neuralnet.Sigmoid{}.ApplyR(rv, autofunc.NewRVariable(d.TraceRate, rv))
 	keepRate := autofunc.AddScalerR(autofunc.ScaleR(traceRate, -1), 1)
-	newState = autofunc.AddR(autofunc.ScaleFirstR(state, keepRate),
-		autofunc.ScaleFirstR(autofunc.OuterProductR(out, in), traceRate))
+	if len(keepRate.Output()) == 1 {
+		newState = autofunc.AddR(autofunc.ScaleFirstR(state, keepRate),
+			autofunc.ScaleFirstR(autofunc.OuterProductR(out, in), traceRate))
+	} else {
+		newState = autofunc.AddR(autofunc.MulR(state, keepRate),
+			autofunc.MulR(autofunc.OuterProductR(out, in), traceRate))
+	}
 
 	return
 }
