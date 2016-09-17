@@ -93,19 +93,18 @@ func testCapacityOnce(m experiments.Model, hidden []int, capacity int) bool {
 		sample.Outputs = append(sample.Outputs, out)
 	}
 
-	gradienter := &sgd.RMSProp{
+	gradienter := &sgd.Momentum{
 		Gradienter: &seqtoseq.BPTT{
 			Block:    b,
 			Learner:  b.(sgd.Learner),
 			CostFunc: &neuralnet.SigmoidCECost{},
 		},
-		Resiliency: 0.9,
+		Momentum: 0.9,
 	}
 	samples := sgd.SliceSampleSet{sample}
-	var costs []float64
+	costs := []float64{seqtoseq.TotalCostBlock(b, 1, samples, &neuralnet.SigmoidCECost{})}
 	for !experiments.Converging(costs, MinIterations) {
 		sgd.SGD(gradienter, samples, 0.001, 1, 1)
-
 		cost := seqtoseq.TotalCostBlock(b, 1, samples, &neuralnet.SigmoidCECost{})
 		costs = append(costs, cost)
 
