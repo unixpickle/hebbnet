@@ -16,7 +16,7 @@ func Converging(costs []float64, minLen int) bool {
 		return true
 	}
 	totalGain := costs[0] - mean(costs[3*len(costs)/4:])
-	return halfGain/totalGain < 1e-3
+	return halfGain/totalGain < 1e-2
 }
 
 func mean(list linalg.Vector) float64 {
