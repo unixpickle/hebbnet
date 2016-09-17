@@ -45,6 +45,7 @@ func main() {
 	maxCapacity := 1
 	fmt.Println("Trying capacity", maxCapacity)
 	for testCapacity(creator, hiddenSizes, maxCapacity) {
+		minCapacity = maxCapacity
 		maxCapacity *= 2
 		fmt.Println("Trying capacity", maxCapacity)
 	}
