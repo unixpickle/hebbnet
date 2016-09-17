@@ -16,16 +16,7 @@ const (
 )
 
 func VisualizeMatrix(m *linalg.Matrix) image.Image {
-	minValue := math.Inf(1)
-	maxValue := math.Inf(-1)
-	for _, x := range m.Data {
-		if x < minValue {
-			minValue = x
-		}
-		if x > maxValue {
-			maxValue = x
-		}
-	}
+	maxAbs := linalg.Vector(m.Data).MaxAbs()
 
 	img := image.NewRGBA(image.Rect(0, 0, dotPadding*(m.Cols+1)+dotRadius*2*m.Cols,
 		dotPadding*(m.Rows+1)+dotRadius*2*m.Rows))
@@ -35,15 +26,17 @@ func VisualizeMatrix(m *linalg.Matrix) image.Image {
 		y := float64(dotPadding + i*(dotPadding+dotRadius*2))
 		for j := 0; j < m.Cols; j++ {
 			val := m.Get(i, j)
-			if minValue == maxValue {
-				val = 0.5
-			} else {
-				val -= minValue
-				val /= maxValue - minValue
+			if maxAbs > 0 {
+				val /= maxAbs
 			}
-			brightness := uint8(0xff - int(0xff*val+0.5))
+			if val > 0 {
+				gc.SetFillColor(color.RGBA{R: uint8(val*0xff + 0.5), A: 0xff})
+			} else {
+				gc.SetFillColor(color.RGBA{B: uint8(-val*0xff + 0.5), A: 0xff})
+			}
 			x := float64(dotPadding + j*(dotPadding+dotRadius*2))
-			gc.SetFillColor(color.Gray{Y: brightness})
+			gc.SetLineWidth(dotStroke)
+			gc.SetStrokeColor(color.Gray{Y: 0xff})
 			gc.BeginPath()
 			gc.ArcTo(x+dotRadius, y+dotRadius, dotRadius, dotRadius, 0, math.Pi*2)
 			gc.Close()
