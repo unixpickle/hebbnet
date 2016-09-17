@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/unixpickle/hebbnet/experiments"
 	"github.com/unixpickle/num-analysis/linalg"
 	"github.com/unixpickle/sgd"
 	"github.com/unixpickle/weakai/neuralnet"
@@ -14,19 +15,19 @@ import (
 	"github.com/unixpickle/weakai/rnn/seqtoseq"
 )
 
-const RandomRestarts = 2
+const (
+	RandomRestarts = 2
+	MinIterations  = 100
+)
 
 func main() {
 	if len(os.Args) < 3 {
 		fmt.Fprintln(os.Stderr, "Usage:", os.Args[0], "model_name hidden1 ...")
-		fmt.Fprintln(os.Stderr, "\nAvailable models:")
-		for _, name := range CreatorNames {
-			fmt.Fprintln(os.Stderr, " -", name)
-		}
+		experiments.PrintModels()
 		fmt.Fprintln(os.Stderr)
 		os.Exit(1)
 	}
-	creator, ok := Creators[os.Args[1]]
+	creator, ok := experiments.Models[os.Args[1]]
 	if !ok {
 		fmt.Fprintln(os.Stderr, "Unknown model:", os.Args[1])
 		os.Exit(1)
@@ -64,18 +65,18 @@ func main() {
 	fmt.Println("Best capacity is", minCapacity)
 }
 
-func testCapacity(c Creator, hidden []int, capacity int) bool {
+func testCapacity(m experiments.Model, hidden []int, capacity int) bool {
 	for i := 0; i <= RandomRestarts; i++ {
-		if testCapacityOnce(c, hidden, capacity) {
+		if testCapacityOnce(m, hidden, capacity) {
 			return true
 		}
 	}
 	return false
 }
 
-func testCapacityOnce(c Creator, hidden []int, capacity int) bool {
+func testCapacityOnce(m experiments.Model, hidden []int, capacity int) bool {
 	rand.Seed(time.Now().UnixNano())
-	b := createBlock(c, hidden)
+	b := createBlock(m, hidden)
 	sample := seqtoseq.Sample{
 		Inputs:  []linalg.Vector{},
 		Outputs: []linalg.Vector{},
@@ -102,7 +103,7 @@ func testCapacityOnce(c Creator, hidden []int, capacity int) bool {
 	}
 	samples := sgd.SliceSampleSet{sample}
 	var costs []float64
-	for !isConverging(costs) {
+	for !experiments.Converging(costs, MinIterations) {
 		sgd.SGD(gradienter, samples, 0.001, 1, 1)
 
 		cost := seqtoseq.TotalCostBlock(b, 1, samples, &neuralnet.SigmoidCECost{})
@@ -125,14 +126,14 @@ func testCapacityOnce(c Creator, hidden []int, capacity int) bool {
 	return false
 }
 
-func createBlock(c Creator, hidden []int) rnn.Block {
+func createBlock(m experiments.Model, hidden []int) rnn.Block {
 	b := rnn.StackedBlock{}
 	for i, size := range hidden {
 		inputSize := 1
 		if i > 0 {
 			inputSize = hidden[i-1]
 		}
-		b = append(b, c.CreateModel(inputSize, size))
+		b = append(b, m.CreateModel(inputSize, size))
 	}
 	outNet := neuralnet.Network{
 		&neuralnet.DenseLayer{
@@ -143,27 +144,4 @@ func createBlock(c Creator, hidden []int) rnn.Block {
 	outNet.Randomize()
 	b = append(b, rnn.NewNetworkBlock(outNet, 0))
 	return b
-}
-
-func isConverging(costs []float64) bool {
-	if len(costs) < 400 {
-		return false
-	}
-	halfGain := mean(costs[len(costs)/2:3*len(costs)/4]) - mean(costs[3*len(costs)/4:])
-	if halfGain < 0 {
-		return true
-	}
-	totalGain := costs[0] - mean(costs[3*len(costs)/4:])
-	if halfGain/totalGain < 1e-3 {
-		return true
-	}
-	return false
-}
-
-func mean(list linalg.Vector) float64 {
-	var sum float64
-	for _, x := range list {
-		sum += x
-	}
-	return sum / float64(len(list))
 }
