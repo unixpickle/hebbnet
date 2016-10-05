@@ -46,6 +46,7 @@ func NewModel() *Model {
 		}
 		layer = hebbnet.NewDenseLayer(inSize, outSize, true)
 		layer.UseActivation = true
+		layer.InitRates(0.1, 0.3)
 		res.Block = append(res.Block, layer)
 		res.Layers = append(res.Layers, layer)
 	}

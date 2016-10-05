@@ -89,6 +89,31 @@ func NewDenseLayer(inCount, outCount int, variableRate bool) *DenseLayer {
 	return res
 }
 
+// InitRates randomly initializes the trace rates in a
+// biased fashion.
+// The rates are divided up into three sections: long-term
+// short-term, and neutral.
+// The arguments specify, out of all rates, the fraction
+// of long-term and short-term ones.
+func (d *DenseLayer) InitRates(longTerm, shortTerm float64) {
+	indices := rand.Perm(len(d.TraceRate.Vector))
+	lt := int(math.Ceil(longTerm * float64(len(indices))))
+	st := int(math.Ceil(shortTerm * float64(len(indices))))
+	for lt+st > len(indices) {
+		if st > 0 {
+			st--
+		} else {
+			lt--
+		}
+	}
+	for _, i := range indices[:lt] {
+		d.TraceRate.Vector[i] = rand.Float64() - 2
+	}
+	for _, i := range indices[lt:st] {
+		d.TraceRate.Vector[i] = rand.Float64() + 2
+	}
+}
+
 // Parameters returns the layer's learnable parameters.
 func (d *DenseLayer) Parameters() []*autofunc.Variable {
 	return []*autofunc.Variable{

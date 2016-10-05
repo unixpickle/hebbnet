@@ -20,6 +20,7 @@ type HebbModel struct {
 func (h *HebbModel) CreateModel(in, out int) rnn.Block {
 	res := hebbnet.NewDenseLayer(in, out, h.VariableRate)
 	res.UseActivation = h.UseActivation
+	res.InitRates(0.1, 0.3)
 	return res
 }
 
