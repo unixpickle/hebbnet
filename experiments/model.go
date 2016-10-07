@@ -30,12 +30,19 @@ func (l *LSTMModel) CreateModel(in, out int) rnn.Block {
 	return rnn.NewLSTM(in, out)
 }
 
-var ModelNames = []string{"hebbfixed", "hebbvariable", "lstm"}
+type NPRNNModel struct{}
+
+func (l *NPRNNModel) CreateModel(in, out int) rnn.Block {
+	return rnn.NewNPRNN(in, out)
+}
+
+var ModelNames = []string{"hebbfixed", "hebbvariable", "lstm", "nprnn"}
 
 var Models = map[string]Model{
 	"hebbfixed":    &HebbModel{UseActivation: true, VariableRate: false},
 	"hebbvariable": &HebbModel{UseActivation: true, VariableRate: true},
 	"lstm":         &LSTMModel{},
+	"nprnn":        &NPRNNModel{},
 }
 
 func PrintModels() {
