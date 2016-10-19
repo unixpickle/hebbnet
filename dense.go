@@ -125,45 +125,63 @@ func (d *DenseLayer) Parameters() []*autofunc.Variable {
 	}
 }
 
-// StateSize returns the size of the state vectors.
-func (d *DenseLayer) StateSize() int {
-	return d.InputCount * d.OutputCount
-}
-
 // StartState returns the initial trace.
-func (d *DenseLayer) StartState() autofunc.Result {
-	return d.InitTrace
+func (d *DenseLayer) StartState() rnn.State {
+	return rnn.VecState(d.InitTrace.Vector)
 }
 
-// StartStateR returns the initial trace.
-func (d *DenseLayer) StartStateR(rv autofunc.RVector) autofunc.RResult {
-	return autofunc.NewRVariable(d.InitTrace, rv)
+// StartRState returns the initial trace.
+func (d *DenseLayer) StartRState(rv autofunc.RVector) rnn.RState {
+	rvar := autofunc.NewRVariable(d.InitTrace, rv)
+	return rnn.VecRState{State: rvar.Output(), RState: rvar.ROutput()}
 }
 
-// Batch applies the layer to a set of inputs.
-func (d *DenseLayer) Batch(in *rnn.BlockInput) rnn.BlockOutput {
+// PropagateStart propagates through the start state.
+func (d *DenseLayer) PropagateStart(s []rnn.StateGrad, g autofunc.Gradient) {
+	rnn.PropagateVarState(d.InitTrace, s, g)
+}
+
+// PropagateStartR propagates through the start state.
+func (d *DenseLayer) PropagateStartR(s []rnn.RStateGrad, rg autofunc.RGradient,
+	g autofunc.Gradient) {
+	rnn.PropagateVarStateR(d.InitTrace, s, rg, g)
+}
+
+// ApplyBlock applies the layer to a batch of inputs.
+func (d *DenseLayer) ApplyBlock(s []rnn.State, in []autofunc.Result) rnn.BlockResult {
 	res := &denseLayerOutput{}
-	for i := 0; i < len(in.Inputs); i++ {
-		newState, out := d.timestep(in.States[i], in.Inputs[i])
+	for i, input := range in {
+		poolVar := &autofunc.Variable{Vector: linalg.Vector(s[i].(rnn.VecState))}
+		res.StatePool = append(res.StatePool, poolVar)
+		newState, out := d.timestep(poolVar, input)
 		res.StateResults = append(res.StateResults, newState)
 		res.OutResults = append(res.OutResults, out)
-		res.StateVecs = append(res.StateVecs, newState.Output())
-		res.OutVecs = append(res.OutVecs, out.Output())
+		res.StatesOut = append(res.StatesOut, rnn.VecState(newState.Output()))
+		res.VecsOut = append(res.VecsOut, out.Output())
 	}
 	return res
 }
 
 // BatchR applies the layer to a set of inputs.
-func (d *DenseLayer) BatchR(rv autofunc.RVector, in *rnn.BlockRInput) rnn.BlockROutput {
+func (d *DenseLayer) ApplyBlockR(rv autofunc.RVector, s []rnn.RState,
+	in []autofunc.RResult) rnn.BlockRResult {
 	res := &denseLayerROutput{}
-	for i := 0; i < len(in.Inputs); i++ {
-		newState, out := d.timestepR(rv, in.States[i], in.Inputs[i])
+	for i, input := range in {
+		poolVar := &autofunc.Variable{Vector: linalg.Vector(s[i].(rnn.VecRState).State)}
+		poolVarR := &autofunc.RVariable{
+			Variable:   poolVar,
+			ROutputVec: s[i].(rnn.VecRState).RState,
+		}
+		res.StatePool = append(res.StatePool, poolVar)
+		newState, out := d.timestepR(rv, poolVarR, input)
 		res.StateResults = append(res.StateResults, newState)
 		res.OutResults = append(res.OutResults, out)
-		res.StateVecs = append(res.StateVecs, newState.Output())
-		res.OutVecs = append(res.OutVecs, out.Output())
-		res.RStateVecs = append(res.RStateVecs, newState.ROutput())
-		res.ROutVecs = append(res.ROutVecs, out.ROutput())
+		res.VecsOut = append(res.VecsOut, out.Output())
+		res.RVecsOut = append(res.RVecsOut, out.ROutput())
+		res.StatesOut = append(res.StatesOut, rnn.VecRState{
+			State:  newState.Output(),
+			RState: newState.ROutput(),
+		})
 	}
 	return res
 }
@@ -236,82 +254,107 @@ func (d *DenseLayer) timestepR(rv autofunc.RVector, state,
 }
 
 type denseLayerOutput struct {
-	OutVecs      []linalg.Vector
-	StateVecs    []linalg.Vector
+	StatePool    []*autofunc.Variable
+	VecsOut      []linalg.Vector
+	StatesOut    []rnn.State
 	OutResults   []autofunc.Result
 	StateResults []autofunc.Result
 }
 
 func (d *denseLayerOutput) Outputs() []linalg.Vector {
-	return d.OutVecs
+	return d.VecsOut
 }
 
-func (d *denseLayerOutput) States() []linalg.Vector {
-	return d.StateVecs
+func (d *denseLayerOutput) States() []rnn.State {
+	return d.StatesOut
 }
 
-func (d *denseLayerOutput) Gradient(u *rnn.UpstreamGradient, g autofunc.Gradient) {
-	if len(d.StateVecs) == 0 {
-		return
+func (d *denseLayerOutput) PropagateGradient(u []linalg.Vector, s []rnn.StateGrad,
+	g autofunc.Gradient) []rnn.StateGrad {
+	if len(d.StatesOut) == 0 {
+		return nil
 	}
-	tempStateUpstream := make(linalg.Vector, len(d.StateVecs[0]))
-	tempOutUpstream := make(linalg.Vector, len(d.OutVecs[0]))
-	for i := 0; i < len(d.OutVecs); i++ {
-		if u.States != nil {
-			copy(tempStateUpstream, u.States[i])
+	tempStateUpstream := make(linalg.Vector, len(d.StatesOut[0].(rnn.VecState)))
+	tempOutUpstream := make(linalg.Vector, len(d.VecsOut[0]))
+	downstream := make([]rnn.StateGrad, len(d.VecsOut))
+	for i := range downstream {
+		if s != nil && s[i] != nil {
+			copy(tempStateUpstream, s[i].(rnn.VecStateGrad))
+		} else if s != nil && i > 0 && s[i-1] != nil {
+			for j := range tempStateUpstream {
+				tempStateUpstream[j] = 0
+			}
 		}
-		if u.Outputs != nil {
-			copy(tempOutUpstream, u.Outputs[i])
+		if u != nil {
+			copy(tempOutUpstream, u[i])
 		}
+		g[d.StatePool[i]] = make(linalg.Vector, len(d.StatePool[i].Vector))
 		d.OutResults[i].PropagateGradient(tempOutUpstream, g)
 		d.StateResults[i].PropagateGradient(tempStateUpstream, g)
+		downstream[i] = rnn.VecStateGrad(g[d.StatePool[i]])
+		delete(g, d.StatePool[i])
 	}
+	return downstream
 }
 
 type denseLayerROutput struct {
-	OutVecs      []linalg.Vector
-	StateVecs    []linalg.Vector
-	ROutVecs     []linalg.Vector
-	RStateVecs   []linalg.Vector
+	StatePool    []*autofunc.Variable
+	VecsOut      []linalg.Vector
+	RVecsOut     []linalg.Vector
+	StatesOut    []rnn.RState
 	OutResults   []autofunc.RResult
 	StateResults []autofunc.RResult
 }
 
 func (d *denseLayerROutput) Outputs() []linalg.Vector {
-	return d.OutVecs
+	return d.VecsOut
 }
 
 func (d *denseLayerROutput) ROutputs() []linalg.Vector {
-	return d.ROutVecs
+	return d.RVecsOut
 }
 
-func (d *denseLayerROutput) States() []linalg.Vector {
-	return d.StateVecs
+func (d *denseLayerROutput) RStates() []rnn.RState {
+	return d.StatesOut
 }
 
-func (d *denseLayerROutput) RStates() []linalg.Vector {
-	return d.RStateVecs
-}
-
-func (d *denseLayerROutput) RGradient(u *rnn.UpstreamRGradient, rg autofunc.RGradient,
-	g autofunc.Gradient) {
-	if len(d.StateVecs) == 0 {
-		return
+func (d *denseLayerROutput) PropagateRGradient(u, uR []linalg.Vector, s []rnn.RStateGrad,
+	rg autofunc.RGradient, g autofunc.Gradient) []rnn.RStateGrad {
+	if len(d.StatesOut) == 0 {
+		return nil
 	}
-	tempStateUpstream := make(linalg.Vector, len(d.StateVecs[0]))
-	tempStateUpstreamR := make(linalg.Vector, len(d.StateVecs[0]))
-	tempOutUpstream := make(linalg.Vector, len(d.OutVecs[0]))
-	tempOutUpstreamR := make(linalg.Vector, len(d.OutVecs[0]))
-	for i := 0; i < len(d.OutVecs); i++ {
-		if u.States != nil {
-			copy(tempStateUpstream, u.States[i])
-			copy(tempStateUpstreamR, u.RStates[i])
+	if g == nil {
+		g = autofunc.Gradient{}
+	}
+	tempStateUpstream := make(linalg.Vector, len(d.StatesOut[0].(rnn.VecRState).State))
+	tempStateUpstreamR := make(linalg.Vector, len(tempStateUpstream))
+	tempOutUpstream := make(linalg.Vector, len(d.VecsOut[0]))
+	tempOutUpstreamR := make(linalg.Vector, len(d.VecsOut[0]))
+	downstream := make([]rnn.RStateGrad, len(d.VecsOut))
+	for i := 0; i < len(d.VecsOut); i++ {
+		if s != nil && s[i] != nil {
+			copy(tempStateUpstream, s[i].(rnn.VecRStateGrad).State)
+			copy(tempStateUpstreamR, s[i].(rnn.VecRStateGrad).RState)
+		} else if s != nil && i > 0 && s[i-1] != nil {
+			for j := range tempStateUpstream {
+				tempStateUpstream[j] = 0
+				tempStateUpstreamR[j] = 0
+			}
 		}
-		if u.Outputs != nil {
-			copy(tempOutUpstream, u.Outputs[i])
-			copy(tempOutUpstreamR, u.ROutputs[i])
+		if u != nil {
+			copy(tempOutUpstream, u[i])
+			copy(tempOutUpstreamR, uR[i])
 		}
+		g[d.StatePool[i]] = make(linalg.Vector, len(d.StatePool[i].Vector))
+		rg[d.StatePool[i]] = make(linalg.Vector, len(d.StatePool[i].Vector))
 		d.OutResults[i].PropagateRGradient(tempOutUpstream, tempOutUpstreamR, rg, g)
 		d.StateResults[i].PropagateRGradient(tempStateUpstream, tempStateUpstreamR, rg, g)
+		downstream[i] = rnn.VecRStateGrad{
+			State:  g[d.StatePool[i]],
+			RState: rg[d.StatePool[i]],
+		}
+		delete(g, d.StatePool[i])
+		delete(rg, d.StatePool[i])
 	}
+	return downstream
 }
