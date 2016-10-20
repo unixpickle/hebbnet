@@ -137,12 +137,12 @@ func (d *DenseLayer) StartRState(rv autofunc.RVector) rnn.RState {
 }
 
 // PropagateStart propagates through the start state.
-func (d *DenseLayer) PropagateStart(s []rnn.StateGrad, g autofunc.Gradient) {
+func (d *DenseLayer) PropagateStart(_ []rnn.State, s []rnn.StateGrad, g autofunc.Gradient) {
 	rnn.PropagateVarState(d.InitTrace, s, g)
 }
 
 // PropagateStartR propagates through the start state.
-func (d *DenseLayer) PropagateStartR(s []rnn.RStateGrad, rg autofunc.RGradient,
+func (d *DenseLayer) PropagateStartR(_ []rnn.RState, s []rnn.RStateGrad, rg autofunc.RGradient,
 	g autofunc.Gradient) {
 	rnn.PropagateVarStateR(d.InitTrace, s, rg, g)
 }
